@@ -77,6 +77,6 @@ checkpoints/
 # ============================
 # Project-specific: Data & Output
 # ============================
-Data/images/
-Data/output/
+# 输入测试图与所有输出结果都不入库（体积大，可重新生成）
+Data/
 output_*/
