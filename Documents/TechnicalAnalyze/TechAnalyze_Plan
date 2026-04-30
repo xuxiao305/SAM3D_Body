@@ -1,0 +1,83 @@
+1. 概述与背景
+1.1 论文核心贡献总结
+1.2 代码工程定位说明（当前代码为原始 SAM 3D Body 基线实现，非 Fast 加速版本）
+1.3 论文—代码映射总览图
+2. 推理管线架构分析
+2.1 原始 SAM 3D Body 管线（论文 §3.1 vs 代码实现）
+2.1.1 人体检测与分割 — tools/build_detector.py / tools/build_sam.py
+2.1.2 FOV 估计 — tools/build_fov_estimator.py
+2.1.3 图像编码（ViT/DINOv3 + Ray Conditioning）— models/backbones/ + models/modules/camera_embed.py
+2.1.4 Prompt 编码（关键点 + 掩码）— models/decoders/prompt_encoder.py
+2.1.5 Body Decoder（交叉注意力 + 中间预测 + 关键点 Token 更新）— models/meta_arch/sam3d_body.py + models/decoders/promptable_decoder.py
+2.1.6 Hand Decoder（手部检测 → 裁剪 → 独立解码）— sam3d_body_estimator.py 中手部流程 + forward_decoder_hand()
+2.1.7 手-体合并与腕部 IK — run_inference() 中的 Merge + mhr_utils.fix_wrist_euler()
+2.1.8 迭代 MHR-to-SMPL 转换 — 论文 Eq.(1) vs 代码中的 MHRHead.mhr_forward()
+2.2 Fast SAM 3D Body 加速管线（论文 §3.2 vs 代码差异）
+2.2.1 空间先验解耦（YOLO11-Pose 替代串行手部检测）— 论文描述 vs 代码现状
+2.2.2 静态图重整（TensorRT / torch.compile / CUDA Graph）— 工程中未实现
+2.2.3 计算感知解码器剪枝（中间预测层选择 / 关键点提示移除）— 代码中的可配置项 vs 论文推荐配置
+2.2.4 管线重构（GPU 原生手部裁剪 / Body-Hand 批处理）— 代码现状 vs 加速方案
+2.2.5 神经运动学投影（MLP 替代迭代拟合）— 论文 Eq.(4) vs 代码中缺失的模块
+3. 核心模块逐层剖析
+3.1 主模型 SAM3DBody（models/meta_arch/sam3d_body.py）
+3.1.1 模型初始化与子模块注册
+3.1.2 Token 构建策略（MHR Token / Prompt Token / Keypoint Token / Hand Token）
+3.1.3 Body Decoder 前向流程 — forward_decoder()
+3.1.4 Hand Decoder 前向流程 — forward_decoder_hand()
+3.1.5 推理全流程 — run_inference() 十步流水线详解
+3.1.6 关键点提示精调 — run_keypoint_prompt()
+3.2 解码器 PromptableDecoder（models/decoders/promptable_decoder.py）
+3.2.1 Transformer 解码层结构
+3.2.2 中间预测机制（IntermPred）与层选择
+3.2.3 关键点 Token 反馈更新循环
+3.3 MHR 头部 MHRHead（models/heads/mhr_head.py）
+3.3.1 紧凑连续表示（6D + sincos）与参数分解（469 维）
+3.3.2 MHR 前向运动学 — mhr_forward()
+3.3.3 手部 PCA 基底与手部姿态替换 — replace_hands_in_pose()
+3.4 相机头部 PerspectiveHead（models/heads/camera_head.py）
+3.4.1 透视投影与裁剪-全图坐标变换
+3.5 骨干网络（models/backbones/）
+3.5.1 自定义 ViT（vit.py）— 架构、Flash Attention、位置编码插值
+3.5.2 DINOv3 骨干（dinov3.py）— Torch Hub 加载与适配
+3.6 关键模块库（models/modules/）
+3.6.1 Transformer 基础组件 — transformer.py
+3.6.2 相机射线编码 — camera_embed.py（Fourier 位置编码）
+3.6.3 几何工具 — geometry_utils.py（旋转表示转换、透视投影）
+3.6.4 MHR 工具 — mhr_utils.py（连续-欧拉转换、腕部修正）
+3.6.5 辅助模块 — drop_path.py / layer_scale.py / swiglu_ffn.py
+4. 外围工具与数据管线
+4.1 人体检测器 — tools/build_detector.py（ViTDet-H / SAM3）
+4.2 分割器 — tools/build_sam.py（SAM2.1 / SAM3）
+4.3 FOV 估计器 — tools/build_fov_estimator.py（MoGe2）
+4.4 数据预处理管线 — data/transforms/ + data/utils/prepare_batch.py
+4.5 可视化系统 — visualization/renderer.py + skeleton_visualizer.py
+5. 论文实验与代码对应关系
+5.1 评测基准与指标（3DPW / EMDB / RICH / Harmony4D / COCO / LSPET / FreiHAND）— data/scripts/ 各数据集配置
+5.2 Oracle vs Automatic 评测协议 — 代码中的 bbox 输入路径
+5.3 消融实验与代码可配置项对应
+5.3.1 中间预测层选择（Table 3）— do_interm_preds 与 S 集合
+5.3.2 输入分辨率（Table 4）— input_size 参数
+5.3.3 FOV 估计器规模（Table 5）— MoGe2 模型变体
+5.3.4 检测器选择（Table 7）— YOLO11-Pose vs ViTDet-H
+5.3.5 批处理策略（Table 8）— full_batch vs hand_batch vs no_batch
+5.3.6 姿态修正与关键点提示（Table 6）— Correctives / KP Prompt 开关
+6. 加速方案落地差距分析
+6.1 已实现 vs 未实现对照表
+6.2 空间先验解耦 — 实现路径评估（需引入 YOLO11-Pose + 手部 bbox 解析推导）
+6.3 静态图编译 — TensorRT / torch.compile 集成点
+6.4 解码器剪枝 — 现有代码中的开关与需新增的逻辑
+6.5 神经运动学投影 MLP — 全新模块设计（架构、训练数据生成、损失函数）
+6.6 GPU 原生手部裁剪 — 不同iable sampling grid 实现
+6.7 运动学先验精调 MLP — AMASS 噪声去噪训练
+7. 关键发现与建议
+7.1 代码架构优势（模块化程度、可扩展性）
+7.2 潜在优化点与风险
+7.3 Fast 版本落地的优先级建议
+说明：
+
+第 1-2 章侧重论文与代码的宏观映射，确认管线阶段的一一对应关系
+第 3 章深入代码内部，逐模块拆解实现细节
+第 4 章覆盖外围工具链
+第 5 章将论文实验表格与代码可配置项精确对应
+第 6 章是核心差异分析——当前代码实现的是原始 3DB 基线，论文中 Fast 加速方案（空间解耦、静态图、MLP 投影等）大部分未在代码中实现
+第 7 章总结性建议
